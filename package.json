@@ -2,6 +2,7 @@
 	"name": "pinf-to-openshift",
 	"version": "0.1.0",
     "dependencies": {
+        "bash.origin": "0.1.x",
         "to.pinf.lib": "0.1.x"
     },
   "config": {
