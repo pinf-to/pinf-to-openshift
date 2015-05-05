@@ -1,0 +1,35 @@
+#!/bin/bash
+# Source https://github.com/cadorn/bash.origin
+. "$HOME/.bash.origin"
+function init {
+	eval BO_SELF_BASH_SOURCE="$BO_READ_SELF_BASH_SOURCE"
+	BO_deriveSelfDir ___TMP___ "$BO_SELF_BASH_SOURCE"
+	local __BO_DIR__="$___TMP___"
+
+	# TODO: Setup alias for 'rhc' in 'bin/rhc'. When this command is called we trigger
+	#       everything below on first use unless a '--prime' flag is installed during install.
+
+	# TODO: Adapt this to other OSes.
+	if ! BO_has "rhc"; then
+		# @see https://developers.openshift.com/en/getting-started-osx.html#client-tools
+		BO_format "$VERBOSE" "HEADER" "Installing OpenShift Client Tools (rhc)"
+
+		# TODO: Check output to ensure it installed ok. If there are errors
+		#       run 'sudo gem update' and repeat.
+		if [ -z "$VERBOSE" ]; then
+			BO_sudo "gem install rhc" > /dev/null
+		else
+			BO_sudo "gem install rhc"
+		fi
+
+		BO_format "$VERBOSE" "FOOTER"
+	fi
+
+	# TODO: Configure dynamically for our context only (vs using $HOME).
+	if [ ! -e  "$HOME/.openshift" ]; then
+		BO_format "$VERBOSE" "HEADER" "Setting up OpenShift Client Tools (rhc)"
+		rhc setup
+		BO_format "$VERBOSE" "FOOTER"
+	fi
+}
+init $@

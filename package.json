@@ -1,10 +1,14 @@
 {
 	"name": "pinf-to-openshift",
 	"version": "0.1.0",
-    "dependencies": {
-        "bash.origin": "0.1.x",
-        "to.pinf.lib": "0.1.x"
-    },
+  "main": "plugin.js",
+  "scripts": {
+    "install": "bin/install"
+  },
+  "dependencies": {
+    "bash.origin": "0.1.x",
+    "to.pinf.lib": "0.1.x"
+  },
   "config": {
     "pio.deploy.converter": {
       "name": "nodejs-lib"
