@@ -1,5 +1,8 @@
 
 const FORCE_TURN = false;
+const URL = require("url");
+const DNS = require("dns");
+
 
 exports.for = function (API) {
 
@@ -82,7 +85,15 @@ exports.for = function (API) {
 						ssh: getVar("SSH")
 					};
 
-					return callback(null);
+					resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
+
+					return DNS.lookup(resolvedConfig.app.host, function (err, record) {
+						if (err) return callback(err);
+
+console.log("record", record);
+
+						return callback(null);
+					});
 				});
 			}
 
