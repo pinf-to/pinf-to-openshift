@@ -1,5 +1,5 @@
 
-const FORCE_TURN = true;
+const FORCE_TURN = false;
 
 exports.for = function (API) {
 
@@ -125,19 +125,72 @@ exports.for = function (API) {
 				return API.runCommands([
 					'echo "Copy files ..."',
 					'rsync -a "' + fromPath + '/" "' + targetPath + '/"',
-					'rm -Rf */.git */*/.git */*/*/.git */*/*/*/.git */*/*/*/*/.git',
-					'rm -Rf .gitignore */.gitignore */*/.gitignore */*/*/.gitignore */*/*/*/.gitignore */*/*/*/*/.gitignore',
-					'rm -f symfony-cmf/app/bootstrap.php.cache',
-					'echo -e "cd $OPENSHIFT_REPO_DIR\nphp \\`find -name build_bootstrap.php\\`" > .openshift/action_hooks/build',
-					'chmod +x .openshift/action_hooks/build',
-					'echo "Commit changes ..."',
-					'git add -A',
-					'git commit -m "Changes"',
-					'echo "Push changes ..."',
-					'git push origin master'
+					'rm -Rf */.git **/.git',
+					'rm -Rf .gitignore **/.gitignore',
 				], {
 					cwd: targetPath
-				}, callback);
+				}, function (err) {
+					if (err) return callback(err);
+
+					function finalize (callback) {
+						return API.runCommands([
+							'echo "Commit changes ..."',
+							'git add -A',
+							'git commit -m "Changes"',
+							'echo "Push changes ..."',
+							'git push origin master'
+						], {
+							cwd: targetPath
+						}, callback);
+					}
+
+					// TODO: Externalize this.
+					if (API.FS.existsSync(API.PATH.join(targetPath, "symfony-cmf"))) {
+						return API.runCommands([
+							'rm -f symfony-cmf/app/bootstrap.php.cache',
+							'echo -e "cd $OPENSHIFT_REPO_DIR\nphp \\`find -name build_bootstrap.php\\`" > .openshift/action_hooks/build',
+							'chmod +x .openshift/action_hooks/build',
+						], {
+							cwd: targetPath
+						}, function (err) {
+							if (err) return callback(err);
+							return finalize(callback);
+						});
+					} else
+					if (API.FS.existsSync(API.PATH.join(targetPath, "program.json"))) {
+
+						var descriptor = JSON.parse(API.FS.readFileSync(API.PATH.join(targetPath, "program.json"), "utf8"));
+
+						var runtimePath = API.PATH.join(fromPath, descriptor.boot.runtime);
+						descriptor.boot.runtime = "./" + API.PATH.basename(runtimePath);
+						API.FS.copySync(runtimePath, API.PATH.join(targetPath, descriptor.boot.runtime));
+
+						delete descriptor.config.sourceHashFile;
+
+						API.FS.outputFileSync(API.PATH.join(targetPath, "program.json"), JSON.stringify(descriptor, null, 4), "utf8");
+
+
+
+						descriptor = JSON.parse(API.FS.readFileSync(API.PATH.join(targetPath, "program.rt.json"), "utf8"));
+
+						descriptor.server.bind = "{{env.OPENSHIFT_NODEJS_IP}}";
+						descriptor.server.port = "{{env.OPENSHIFT_NODEJS_PORT}}";
+
+						API.FS.outputFileSync(API.PATH.join(targetPath, "program.rt.json"), JSON.stringify(descriptor, null, 4), "utf8");
+
+
+
+						// TODO: Do this generically where all external symlinks are inlined.
+						var sourcePath = API.FS.realpathSync(API.PATH.join(targetPath, "www/bundles"));
+						API.FS.removeSync(API.PATH.join(targetPath, "www/bundles"));
+						API.FS.copySync(sourcePath, API.PATH.join(targetPath, "www/bundles"));
+
+
+						return finalize(callback);
+					} else {
+						return finalize(callback);
+					}
+				});
 			});
 		})();
 	}
