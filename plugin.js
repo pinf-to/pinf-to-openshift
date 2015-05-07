@@ -86,11 +86,12 @@ exports.for = function (API) {
 					};
 
 					resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
+					resolvedConfig.app.hostname = URL.parse(resolvedConfig.app.url).hostname;
 
 					return DNS.lookup(resolvedConfig.app.host, function (err, record) {
 						if (err) return callback(err);
 
-console.log("record", record);
+						resolvedConfig.app.ip = record;
 
 						return callback(null);
 					});
@@ -135,6 +136,8 @@ console.log("record", record);
 
 				return API.runCommands([
 					'echo "Copy files ..."',
+					// TODO: Do this generically where all external symlinks are inlined.
+					'rm -Rf "' + targetPath + '/www/bundles" > /dev/null || true',
 					'rsync -a "' + fromPath + '/" "' + targetPath + '/"',
 					'rm -Rf */.git **/.git',
 					'rm -Rf .gitignore **/.gitignore',
