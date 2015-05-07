@@ -25,81 +25,143 @@ exports.for = function (API) {
 				API.FS.mkdirsSync(targetPath);
 			}
 
-			function create (callback) {
-				return API.runCommands([
-					"rhc app create " + resolvedConfig.openshift.app + " " + resolvedConfig.openshift.cartridge
-				], {
-					cwd: targetPath
-				}, callback);
-			}
+			function ensureApp (callback) {
 
-			function checkExisting (callback, verifyCreated) {
-
-				if (previousResolvedConfig && previousResolvedConfig.app) {
-					// TODO: Ensure app does in fact still exist by calling URL or other indicator.
-					resolvedConfig.app = previousResolvedConfig.app;
-					return callback(null);
+				function create (callback) {
+					return API.runCommands([
+						"rhc app create " + resolvedConfig.openshift.app + " " + resolvedConfig.openshift.cartridge
+					], {
+						cwd: targetPath
+					}, callback);
 				}
 
-				return API.runCommands([
-					"rhc show-app " + resolvedConfig.openshift.app
-				], {
-					cwd: targetPath
-				}, function (err, stdout) {
-					if (err) {
-						if (
-							err.code == 101 &&
-							/Application .+ not found/.test(err.stdout.join("\n"))
-						) {
-							if (verifyCreated) {
-								return callback(new Error("App not found after creating it!"));
+				function checkExisting (callback, verifyCreated) {
+
+					if (previousResolvedConfig && previousResolvedConfig.app) {
+						// TODO: Ensure app does in fact still exist by calling URL or other indicator.
+						resolvedConfig.app = previousResolvedConfig.app;
+						return callback(null);
+					}
+
+					return API.runCommands([
+						"rhc show-app " + resolvedConfig.openshift.app
+					], {
+						cwd: targetPath
+					}, function (err, stdout) {
+						if (err) {
+							if (
+								err.code == 101 &&
+								/Application .+ not found/.test(err.stdout.join("\n"))
+							) {
+								if (verifyCreated) {
+									return callback(new Error("App not found after creating it!"));
+								}
+								resolvedConfig.app = {};
+								return create(function (err) {
+									if (err) return callback(err);
+									return checkExisting(callback, true);
+								});
 							}
-							resolvedConfig.app = {};
-							return create(function (err) {
+							return callback(err);
+						}
+
+						function getVar (match) {
+							var m = null;
+							if (typeof match !== "string") {
+								m = stdout.match(match);
+							} else {
+								m = new RegExp(API.ESCAPE_REGEXP_COMPONENT(match) + ":[\\s\\t]*(.+)").exec(stdout);
+							}
+							if (!m) {
+								return "";
+							}
+							return m[1];
+						}
+
+						resolvedConfig.app = {
+							url: getVar(/\s@\s(\S*)\s/),
+							uuid: getVar(/\s@\s(?:\S*)\s\(uuid:\s([0-9a-z]+)\)/),
+							domain: getVar("Domain"),
+							gears: getVar("Gears"),
+							gitUrl: getVar("Git URL"),
+							ssh: getVar("SSH"),
+							aliases: []
+						};
+
+						resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
+						resolvedConfig.app.hostname = URL.parse(resolvedConfig.app.url).hostname;
+
+						return DNS.lookup(resolvedConfig.app.host, function (err, record) {
+							if (err) return callback(err);
+
+							resolvedConfig.app.ip = record;
+
+							return callback(null);
+						});
+					});
+				}
+
+				return checkExisting(callback);
+			}
+
+			function ensureAliases (callback) {
+				if (
+					previousResolvedConfig &&
+					previousResolvedConfig.app &&
+					previousResolvedConfig.app.aliases
+				) {
+					// TODO: Ensure alias does in fact still exist by calling URL or other indicator.
+					resolvedConfig.app.aliases = previousResolvedConfig.app.aliases;
+					return callback(null);
+				}
+				var waitfor = API.WAITFOR.parallel(callback);
+				for (var name in resolvedConfig.openshift.aliases) {
+					waitfor(name, function (name, callback) {
+
+						function create (callback) {
+							API.console.verbose("Provisioning alias '" + name + "' on OpenShift.");
+							return API.runCommands([
+								"rhc alias add " + resolvedConfig.openshift.app + " " + name
+							], {
+								cwd: targetPath
+							}, callback);
+						}
+
+						function checkExisting (callback, verifyCreated) {
+							return API.runCommands([
+								"rhc alias list -a " + resolvedConfig.openshift.app
+							], {
+								cwd: targetPath
+							}, function (err, stdout) {
 								if (err) return callback(err);
-								return checkExisting(callback, true);
+								if (/No aliases associated/.test(stdout)) {
+									if (verifyCreated) {
+										return callback(new Error("Alias '" + name + "' not found after creating it!"));
+									}
+									return create(function (err) {
+										if (err) return callback(err);
+										return checkExisting(callback, true);
+									});
+								}
+								if (new RegExp("^" + API.ESCAPE_REGEXP_COMPONENT(name)).exec(stdout)) {
+									resolvedConfig.app.aliases.push(name);
+								}
+								return callback(null);
 							});
 						}
-						return callback(err);
-					}
 
-					function getVar (match) {
-						var m = null;
-						if (typeof match !== "string") {
-							m = stdout.match(match);
-						} else {
-							m = new RegExp(API.ESCAPE_REGEXP_COMPONENT(match) + ":[\\s\\t]*(.+)").exec(stdout);
-						}
-						if (!m) {
-							return "";
-						}
-						return m[1];
-					}
+						return checkExisting(callback);
 
-					resolvedConfig.app = {
-						url: getVar(/\s@\s(\S*)\s/),
-						uuid: getVar(/\s@\s(?:\S*)\s\(uuid:\s([0-9a-z]+)\)/),
-						domain: getVar("Domain"),
-						gears: getVar("Gears"),
-						gitUrl: getVar("Git URL"),
-						ssh: getVar("SSH")
-					};
-
-					resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
-					resolvedConfig.app.hostname = URL.parse(resolvedConfig.app.url).hostname;
-
-					return DNS.lookup(resolvedConfig.app.host, function (err, record) {
-						if (err) return callback(err);
-
-						resolvedConfig.app.ip = record;
-
-						return callback(null);
 					});
-				});
+				}
+				return waitfor();
 			}
 
 			return API.Q.denodeify(function (callback) {
-				return checkExisting(callback);
+				return ensureApp(function (err) {
+					if (err) return callback(err);
+					return ensureAliases(callback);
+				});
 			})().then(function () {
 				if (FORCE_TURN) {
 					resolvedConfig["@forceTurn"] = Date.now();
