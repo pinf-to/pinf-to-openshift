@@ -1,11 +1,34 @@
 *Status: DEV*
 
-Publish PINF JavaScript Bundles to OpenShift
-============================================
+Publish PINF Logic to OpenShift
+==================================
 
-Use this tool to publish [PINF JavaScript Bundles](https://github.com/pinf/pinf-loader-js) to [OpenShift](http://openshift.com) Gears.
+Use this tool to publish [PINF Logic](https://github.com/pinf-logic/pinf.logic) to [OpenShift](http://openshift.com).
 
-Any portable bundle may be published.
+
+Usage
+-----
+
+    "github.com/pinf-to/pinf-to-openshift/0": {
+        "$to": "live",
+        "sourcePath": "{{$from.pgs.programs.server.getRuntimeConfigFor(server).sourcePath}}",
+        "openshift": {
+            "app": "pinfwiki",
+            "cartridge": "php-5.4"
+        }
+    }
+
+    "github.com/pinf-to/pinf-to-openshift/0": {
+        "$to": "live",
+        "sourcePath": "{{$from.pgs.programs.client.getRuntimeConfigFor(server).targetPath}}",
+        "openshift": {
+            "app": "pinfme",
+            "cartridge": "nodejs-0.10",
+            "aliases": {
+                "pinf.me": true
+            }
+        }
+    }
 
 
 Provenance
