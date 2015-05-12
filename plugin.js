@@ -18,7 +18,15 @@ exports.for = function (API) {
 			API.ASSERT(typeof resolvedConfig.openshift.app, "string");
 			API.ASSERT(typeof resolvedConfig.openshift.cartridge, "string");
 			if (!/^[a-zA-Z0-9]+$/.test(resolvedConfig.openshift.app)) {
-				throw new Error("'openshift.name' must contain only alphanumeric characters (a-z, A-Z, or 0-9)");
+
+				// Normalize name to only allowed characters
+				resolvedConfig.openshift.app = resolvedConfig.openshift.app.replace(/[^0-9a-zA-Z]+/g, "-");
+
+				if (resolvedConfig.openshift.app.length > 32) {
+					resolvedConfig.openshift.app = API.CRYPTO.createHash("md5").update(resolvedConfig.openshift.app).digest("hex");
+				}
+
+//				throw new Error("'openshift.name' must contain only alphanumeric characters (a-z, A-Z, or 0-9)");
 			}
 
 			if (!API.FS.existsSync(targetPath)) {
@@ -177,8 +185,7 @@ exports.for = function (API) {
 
 			var fromPath = resolvedConfig.sourcePath;
 
-			// TODO: Better copy logic that does not copy git dir.
-			if (API.FS.existsSync(API.PATH.join(fromPath, ".git"))) {
+			if (fromPath && API.FS.existsSync(API.PATH.join(fromPath, ".git"))) {
 				return callback(new Error("Cannot copy '" + fromPath + "' as it contains a '.git' directory. Remove first!"));
 			}
 
@@ -193,19 +200,27 @@ exports.for = function (API) {
 				], callback);
 			}
 
-			return ensureValidClone(function (err) {
-				if (err) return callback(err);
-
+			function copyFiles (callback) {
+				if (!fromPath) {
+					return callback(null);
+				}
 				return API.runCommands([
 					'echo "Copy files ..."',
 					// TODO: Do this generically where all external symlinks are inlined.
 					'rm -Rf "' + targetPath + '/www/bundles" > /dev/null || true',
+					// TODO: Better copy logic that does not copy git dir.
 					'rsync -a "' + fromPath + '/" "' + targetPath + '/"',
 					'rm -Rf */.git **/.git',
 					'rm -Rf .gitignore **/.gitignore',
 				], {
 					cwd: targetPath
-				}, function (err) {
+				}, callback);
+			}
+
+			return ensureValidClone(function (err) {
+				if (err) return callback(err);
+
+				return copyFiles(function (err) {
 					if (err) return callback(err);
 
 					function finalize (callback) {
@@ -237,9 +252,11 @@ exports.for = function (API) {
 
 						var descriptor = JSON.parse(API.FS.readFileSync(API.PATH.join(targetPath, "program.json"), "utf8"));
 
-						var runtimePath = API.PATH.join(fromPath, descriptor.boot.runtime);
-						descriptor.boot.runtime = "./" + API.PATH.basename(runtimePath);
-						API.FS.copySync(runtimePath, API.PATH.join(targetPath, descriptor.boot.runtime));
+						if (fromPath) {
+							var runtimePath = API.PATH.join(fromPath, descriptor.boot.runtime);
+							descriptor.boot.runtime = "./" + API.PATH.basename(runtimePath);
+							API.FS.copySync(runtimePath, API.PATH.join(targetPath, descriptor.boot.runtime));
+						}
 
 						delete descriptor.config.sourceHashFile;
 
