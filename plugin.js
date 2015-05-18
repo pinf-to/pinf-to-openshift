@@ -10,6 +10,54 @@ exports.for = function (API) {
 
 	var targetPath = API.PATH.join(API.getTargetPath(), "app");
 
+    function lookup (name, type, callback) {
+    	if (typeof type === "function" && typeof callback === "undefined") {
+    		callback = type;
+    		type = null;
+    	}
+    	return API.Q.fcall(function () {
+	    	function resolve (name, type) {
+		    	API.console.verbose("DNS resolve" + (type ? (" '" + type + "'"):"") + " for: " + name);
+	    		if (type) {
+		            return API.Q.denodeify(DNS.resolve)(name, type);
+	    		} else {
+		            return API.Q.denodeify(DNS.resolve)(name);
+	    		}
+	    	}
+	    	if (typeof lookup._unresolvingIP === "undefined") {
+	    		return resolve("a.domain.that.will.never.resolve." + Date.now() + ".so.we.can.determine.default.ip.com").fail(function(err) {
+		        	if (!/^a\.domain\.that\.will\.never\.resolve\./.test(name)) {
+		        		API.console.debug("Warning: Error looking up hostname '" + name + "':", err.stack);
+		            }
+		            return [];
+	        	}).then(function(addresses) {
+		        	lookup._unresolvingIP = (addresses && addresses.length >0 && addresses[0]) || null;
+		        }).then(function () {
+		        	return lookup(name, type);
+		        });
+	    	}
+	        return resolve(name, type).then(function (addresses) {
+				if (typeof addresses === "string") {
+					addresses = [ addresses ];
+				}
+		        return addresses.filter(function(ip) {
+		            if (ip === lookup._unresolvingIP) return false;
+		            return true;
+		        });
+	        });
+    	}).then(function (result) {
+    		if (callback) {
+    			callback(null, result);
+    		}
+    		return result;
+    	}, function (err) {
+    		if (callback) {
+    			callback(err);
+    		}
+    		throw err;
+    	});
+    }
+
 	exports.resolve = function (resolver, config, previousResolvedConfig) {
 
 		return resolver({}).then(function (resolvedConfig) {
@@ -45,66 +93,87 @@ exports.for = function (API) {
 
 				function checkExisting (callback, verifyCreated) {
 
-					if (previousResolvedConfig && previousResolvedConfig.app) {
-						// TODO: Ensure app does in fact still exist by calling URL or other indicator.
-						resolvedConfig.app = previousResolvedConfig.app;
-						return callback(null);
+					function checkPreviousProvisioned (callback) {
+						if (
+							!previousResolvedConfig ||
+							!previousResolvedConfig.app
+						) {
+							return callback(null, false);
+						}
+						// See if DNS for host resolves. If it does we assume app is still provisioned.
+						return lookup(previousResolvedConfig.app.host, function (err, ip) {
+							if (err) {
+								// Not resolving and thus assumed not provisioned.
+								return callback(null, false);
+							}
+							// Resolving and thus assumed provisioned.
+							return callback(null, true);
+						});
 					}
 
-					return API.runCommands([
-						"rhc show-app " + resolvedConfig.openshift.app
-					], {
-						cwd: targetPath
-					}, function (err, stdout) {
-						if (err) {
-							if (
-								err.code == 101 &&
-								/Application .+ not found/.test(err.stdout.join("\n"))
-							) {
-								if (verifyCreated) {
-									return callback(new Error("App not found after creating it!"));
-								}
-								resolvedConfig.app = {};
-								return create(function (err) {
-									if (err) return callback(err);
-									return checkExisting(callback, true);
-								});
-							}
-							return callback(err);
-						}
-
-						function getVar (match) {
-							var m = null;
-							if (typeof match !== "string") {
-								m = stdout.match(match);
-							} else {
-								m = new RegExp(API.ESCAPE_REGEXP_COMPONENT(match) + ":[\\s\\t]*(.+)").exec(stdout);
-							}
-							if (!m) {
-								return "";
-							}
-							return m[1];
-						}
-
-						resolvedConfig.app = {
-							url: getVar(/\s@\s(\S*)\s/),
-							uuid: getVar(/\s@\s(?:\S*)\s\(uuid:\s([0-9a-z]+)\)/),
-							domain: getVar("Domain"),
-							gears: getVar("Gears"),
-							gitUrl: getVar("Git URL"),
-							ssh: getVar("SSH"),
-							aliases: []
-						};
-
-						resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
-						resolvedConfig.app.hostname = URL.parse(resolvedConfig.app.url).hostname;
-
-						return DNS.lookup(resolvedConfig.app.host, function (err, record) {
-							if (err) return callback(err);
-
-							resolvedConfig.app.ip = record;
-
+					return checkPreviousProvisioned(function (err, previousProvisionedExists) {
+						if (err) return callback(err);
+						
+						if (previousProvisionedExists) {
+							resolvedConfig.app = previousResolvedConfig.app;
 							return callback(null);
+						}
+
+						return API.runCommands([
+							"rhc show-app " + resolvedConfig.openshift.app
+						], {
+							cwd: targetPath
+						}, function (err, stdout) {
+							if (err) {
+								if (
+									err.code == 101 &&
+									/Application .+ not found/.test(err.stdout.join("\n"))
+								) {
+									if (verifyCreated) {
+										return callback(new Error("App not found after creating it!"));
+									}
+									resolvedConfig.app = {};
+									return create(function (err) {
+										if (err) return callback(err);
+										return checkExisting(callback, true);
+									});
+								}
+								return callback(err);
+							}
+
+							function getVar (match) {
+								var m = null;
+								if (typeof match !== "string") {
+									m = stdout.match(match);
+								} else {
+									m = new RegExp(API.ESCAPE_REGEXP_COMPONENT(match) + ":[\\s\\t]*(.+)").exec(stdout);
+								}
+								if (!m) {
+									return "";
+								}
+								return m[1];
+							}
+
+							resolvedConfig.app = {
+								url: getVar(/\s@\s(\S*)\s/),
+								uuid: getVar(/\s@\s(?:\S*)\s\(uuid:\s([0-9a-z]+)\)/),
+								domain: getVar("Domain"),
+								gears: getVar("Gears"),
+								gitUrl: getVar("Git URL"),
+								ssh: getVar("SSH"),
+								aliases: []
+							};
+
+							resolvedConfig.app.host = URL.parse(resolvedConfig.app.url).host;
+							resolvedConfig.app.hostname = URL.parse(resolvedConfig.app.url).hostname;
+
+							return DNS.lookup(resolvedConfig.app.host, function (err, record) {
+								if (err) return callback(err);
+
+								resolvedConfig.app.ip = record;
+
+								return callback(null);
+							});
 						});
 					});
 				}
@@ -166,7 +235,7 @@ exports.for = function (API) {
 			}
 
 			return API.Q.denodeify(function (callback) {
-				return ensureApp(function (err) {
+				ensureApp(function (err) {
 					if (err) return callback(err);
 					return ensureAliases(callback);
 				});

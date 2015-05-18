@@ -1,6 +1,6 @@
 {
-	"name": "pinf-to-openshift",
-	"version": "0.1.0",
+  "name": "pinf-to-openshift",
+  "version": "0.1.0",
   "main": "plugin.js",
   "scripts": {
     "install": "bin/install"
