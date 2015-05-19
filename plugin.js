@@ -73,22 +73,59 @@ exports.for = function (API) {
 				if (resolvedConfig.openshift.app.length > 32) {
 					resolvedConfig.openshift.app = API.CRYPTO.createHash("md5").update(resolvedConfig.openshift.app).digest("hex");
 				}
-
-//				throw new Error("'openshift.name' must contain only alphanumeric characters (a-z, A-Z, or 0-9)");
+			}
+			if (!/^[a-zA-Z0-9_\-\.@\+]+$/.test(resolvedConfig.openshift.publicKeyName)) {
+				// Normalize name to only allowed characters
+				resolvedConfig.openshift.publicKeyName = resolvedConfig.openshift.publicKeyName.replace(/[^a-zA-Z0-9_\-\.@\+]+/g, "-");
 			}
 
 			if (!API.FS.existsSync(targetPath)) {
 				API.FS.mkdirsSync(targetPath);
 			}
 
+			function ensureSSHKey (callback, verify) {
+				function uploadKey (callback) {
+					API.console.verbose("Uploading key '" + resolvedConfig.openshift.publicKeyPath + "' to openshift ssh key name '" + resolvedConfig.openshift.publicKeyName + "'");
+					return API.runCommands([
+						"rhc sshkey add " + resolvedConfig.openshift.publicKeyName + " " + resolvedConfig.openshift.publicKeyPath
+					], {
+						cwd: targetPath
+					}, function (err, stdout) {
+						if (err) return callback(err);
+						return callback(null);					
+					});					
+				}
+				return API.runCommands([
+					"rhc sshkey list"
+				], {
+					cwd: targetPath
+				}, function (err, stdout) {
+					if (err) return callback(err);
+					if (stdout.indexOf(resolvedConfig.openshift.publicKeyName) >= 0) {
+						// Key is already present.
+						return callback(null);
+					}
+					if (verify) {
+						return callback(new Error("Key '" + resolvedConfig.openshift.publicKeyName + "' not found after uploading!"));
+					}
+					return uploadKey(function (err) {
+						if (err) return callback(err);
+						return ensureSSHKey(callback, true);
+					});
+				});
+			}
+
 			function ensureApp (callback) {
 
 				function create (callback) {
-					return API.runCommands([
-						"rhc app create " + resolvedConfig.openshift.app + " " + resolvedConfig.openshift.cartridge
-					], {
-						cwd: targetPath
-					}, callback);
+					return ensureSSHKey(function (err) {
+						if (err) return callback(err);
+						return API.runCommands([
+							"rhc app create " + resolvedConfig.openshift.app + " " + resolvedConfig.openshift.cartridge
+						], {
+							cwd: targetPath
+						}, callback);
+					});
 				}
 
 				function checkExisting (callback, verifyCreated) {
@@ -264,9 +301,25 @@ exports.for = function (API) {
 					return callback(null);
 				}
 				API.FS.removeSync(targetPath);
+				API.FS.outputFileSync(API.PATH.join(API.getTargetPath(), "gitwrap.sh"), [
+					"#!/bin/bash",
+					"ssh " + [
+	                    '-o', 'ConnectTimeout=5',
+	                    '-o', 'ConnectionAttempts=1',
+	                    '-o', 'UserKnownHostsFile=/dev/null',
+	                    '-o', 'StrictHostKeyChecking=no',
+	                    '-o', 'UserKnownHostsFile=/dev/null',
+	                    '-o', 'IdentityFile=' + resolvedConfig.openshift.privateKeyPath
+                   	].join(" ") + " $@"
+				].join("\n"), "utf8");
+				API.FS.chmodSync(API.PATH.join(API.getTargetPath(), "gitwrap.sh"), 0775);
 				return API.runCommands([
 					'git clone "' + resolvedConfig.app.gitUrl + '" "' + targetPath + '"'
-				], callback);
+				], {
+					env: {
+						GIT_SSH: API.PATH.join(API.getTargetPath(), "gitwrap.sh")
+					}
+				}, callback);
 			}
 
 			function copyFiles (callback) {
