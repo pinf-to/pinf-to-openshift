@@ -62,6 +62,17 @@ exports.for = function (API) {
 
 		return resolver({}).then(function (resolvedConfig) {
 
+			if (
+				resolvedConfig.enabled === false
+			) {
+				API.EXTEND(true, resolvedConfig, {
+					app: {
+						ip: ""
+					}
+				});
+				return resolvedConfig;
+			}
+
 			// TODO: Use schema-based validator.
 			API.ASSERT(typeof resolvedConfig.openshift.app, "string");
 			API.ASSERT(typeof resolvedConfig.openshift.cartridge, "string");
@@ -286,6 +297,12 @@ exports.for = function (API) {
 	}
 
 	exports.turn = function (resolvedConfig) {
+
+		if (
+			resolvedConfig.enabled === false
+		) {
+			return resolvedConfig;
+		}
 
 		return API.Q.denodeify(function (callback) {
 
